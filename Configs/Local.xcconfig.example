@@ -1,8 +1,9 @@
-// Your Apple Developer Team ID - https://stackoverflow.com/a/18727947
-DEVELOPMENT_TEAM = ABC123
+// Copy this file to Configs/Local.xcconfig (ignored by git) for local device builds.
+// Apple Developer Team ID: https://developer.apple.com/account
+DEVELOPMENT_TEAM = YOUR_TEAM_ID
 
-// Unique bundle id to be able to register and run locally
-PRODUCT_BUNDLE_IDENTIFIER = chat.bitchat.$(DEVELOPMENT_TEAM)
-
-// App and share extension must use an App Group registered to your team.
-APP_GROUP_ID = group.chat.bitchat.$(DEVELOPMENT_TEAM)
+// Defaults are already IVS-specific in Release.xcconfig.
+// Override only if your Apple Developer account requires a different identifier.
+PRODUCT_BUNDLE_IDENTIFIER = com.ivsjsc.bitchat
+APP_GROUP_ID = group.com.ivsjsc.bitchat
+APP_DISPLAY_NAME = Bitchat IVS
