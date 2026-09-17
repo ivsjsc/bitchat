@@ -39,9 +39,9 @@ For GitHub Actions signed builds, configure these repository secrets:
 - `APP_STORE_CONNECT_ISSUER_ID`
 - `APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64`
 
-The signed workflow imports the distribution identity into an ephemeral keychain on the GitHub-hosted macOS runner, verifies that an Apple Distribution identity exists, uses the App Store Connect API key for automatic provisioning/export, and removes temporary signing material at the end of the job.
+The signed workflows import the distribution identity into an ephemeral keychain on the GitHub-hosted macOS runner, verify that an Apple Distribution identity exists, use the App Store Connect API key for automatic provisioning/export, and remove temporary signing material at the end of the job.
 
-Before the signed workflow can succeed, the Apple Developer account must own/configure:
+Before signed workflows can succeed, the Apple Developer account must own/configure:
 
 1. App ID `com.ivsjsc.bitchat`.
 2. App ID `com.ivsjsc.bitchat.ShareExtension`.
@@ -54,7 +54,30 @@ Before the signed workflow can succeed, the Apple Developer account must own/con
 
 `.github/workflows/ivs-build-artifacts.yml` builds unsigned iOS Simulator and universal macOS artifacts. It is suitable for continuous build verification without Apple credentials and asserts the built IVS bundle identifier and display name.
 
-`.github/workflows/ivs-ios-release.yml` is manual-only. It installs the Apple Distribution signing identity in an ephemeral keychain, authenticates with the App Store Connect API key, archives a signed device build, verifies the main app and Share Extension identifiers, code signatures and App Group entitlements, exports a signed IPA, and can optionally upload the archive to TestFlight.
+`.github/workflows/ivs-ios-release.yml` is manual-only. It installs the Apple Distribution signing identity in an ephemeral keychain, authenticates with the App Store Connect API key, archives a signed device build, verifies the main app and Share Extension identifiers, code signatures and App Group entitlements, exports a signed App Store Connect IPA, and can optionally upload the archive to TestFlight.
+
+### Direct-install iPhone IPA
+
+`.github/workflows/ivs-ios-device-ipa.yml` is a separate manual Ad Hoc release path for installing Bitchat IVS directly on registered iPhones.
+
+Prerequisites:
+
+1. The target iPhone must be registered in the Apple Developer account and its UDID must be known.
+2. The Ad Hoc provisioning profiles generated for both the main app and Share Extension must include that iPhone.
+3. The six signing secrets listed above must be configured in GitHub Actions.
+
+Run **Actions → IVS iOS Device IPA → Run workflow**, enter the registered iPhone UDID, and start the job. The workflow:
+
+- validates the UDID and required signing configuration;
+- creates an ephemeral signing keychain;
+- archives the Release build for a physical iOS device;
+- exports using Apple `ad-hoc` distribution;
+- verifies the main app, Share Extension, signatures and App Group entitlement;
+- decodes both embedded provisioning profiles and fails unless the requested iPhone UDID is actually present;
+- uploads `Bitchat-IVS-iPhone-AdHoc-IPA` as the GitHub Actions artifact;
+- removes temporary signing material from the runner.
+
+An Ad Hoc IPA is installable only on devices included in its provisioning profile. Adding a new iPhone requires registering its UDID and rebuilding the IPA.
 
 ## Upstream sync guardrail
 
