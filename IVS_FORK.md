@@ -33,30 +33,35 @@ For local development, copy `Configs/Local.xcconfig.example` to `Configs/Local.x
 For GitHub Actions signed builds, configure these repository secrets:
 
 - `APPLE_TEAM_ID`
+- `APPLE_DISTRIBUTION_CERTIFICATE_BASE64` — base64 of the exported Apple Distribution `.p12` containing its private key
+- `APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD` — password used when exporting that `.p12`
 - `APP_STORE_CONNECT_API_KEY_ID`
 - `APP_STORE_CONNECT_ISSUER_ID`
 - `APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64`
+
+The signed workflow imports the distribution identity into an ephemeral keychain on the GitHub-hosted macOS runner, verifies that an Apple Distribution identity exists, uses the App Store Connect API key for automatic provisioning/export, and removes temporary signing material at the end of the job.
 
 Before the signed workflow can succeed, the Apple Developer account must own/configure:
 
 1. App ID `com.ivsjsc.bitchat`.
 2. App ID `com.ivsjsc.bitchat.ShareExtension`.
 3. App Group `group.com.ivsjsc.bitchat` assigned to both identifiers.
-4. An App Store Connect app record matching `com.ivsjsc.bitchat` before TestFlight upload.
-5. An App Store Connect API key with sufficient access for signing/provisioning and upload.
+4. An Apple Distribution certificate exported as `.p12` with its private key.
+5. An App Store Connect app record matching `com.ivsjsc.bitchat` before TestFlight upload.
+6. An App Store Connect API key with sufficient access for provisioning/export and upload.
 
 ## CI/CD
 
-`.github/workflows/ivs-build-artifacts.yml` builds unsigned iOS Simulator and universal macOS artifacts. It is suitable for continuous build verification without Apple credentials.
+`.github/workflows/ivs-build-artifacts.yml` builds unsigned iOS Simulator and universal macOS artifacts. It is suitable for continuous build verification without Apple credentials and asserts the built IVS bundle identifier and display name.
 
-`.github/workflows/ivs-ios-release.yml` is manual-only. It authenticates with the App Store Connect API key, archives a signed device build, verifies code signing and entitlements, exports a signed IPA, and can optionally upload the archive to TestFlight.
+`.github/workflows/ivs-ios-release.yml` is manual-only. It installs the Apple Distribution signing identity in an ephemeral keychain, authenticates with the App Store Connect API key, archives a signed device build, verifies the main app and Share Extension identifiers, code signatures and App Group entitlements, exports a signed IPA, and can optionally upload the archive to TestFlight.
 
 ## Upstream sync guardrail
 
 When bringing in upstream changes:
 
 1. Fetch/merge upstream into an integration branch first.
-2. Preserve IVS identity values in `Configs/Release.xcconfig` and the configurable `APP_DISPLAY_NAME` project settings.
+2. Preserve IVS identity values in `Configs/Release.xcconfig` and the plist metadata.
 3. Do not rename transport/protocol constants solely for branding.
 4. Run upstream `Build & Test`, `Dead Code`, and `IVS Build Artifacts` before merging to `main`.
 5. Resolve semantic conflicts in security, transport, identity, persistence, and cryptography manually; never accept either side wholesale without review.
