@@ -24,11 +24,62 @@ The IVS fork intentionally uses identifiers distinct from the upstream applicati
 
 Core Bitchat mesh/protocol naming is not mass-renamed. This preserves compatibility and reduces upstream merge risk.
 
+## Free Personal Team iPhone install
+
+For development/testing on your own iPhone, the repository includes a separate free Apple-ID path that does **not** require a paid Apple Developer Program membership, App Store Connect credentials, a distribution certificate, or GitHub Actions secrets.
+
+The free path is intentionally local because Personal Team signing is tied to the Apple ID signed into Xcode and the physically connected iPhone. GitHub-hosted runners cannot replace that local Personal Team/device relationship.
+
+### What the free path changes
+
+`Configs/PersonalTeam.entitlements` is an empty entitlement profile used only by the local installer. `scripts/install-personal-team.sh` temporarily creates the gitignored `Configs/Local.xcconfig`, assigns a unique Personal Team bundle namespace, overrides both iOS targets to use automatic Apple Development signing, and strips the paid App Group entitlement from the build.
+
+The Bitchat Bluetooth/mesh/protocol source is not changed. The Share Extension remains embedded and receives its own `${PRODUCT_BUNDLE_IDENTIFIER}.ShareExtension` identifier, but cross-process Share Extension handoff through the App Group is intentionally unavailable in the Personal Team build.
+
+### Requirements
+
+1. macOS with Xcode 15 or newer.
+2. Sign in with the free Apple ID in **Xcode → Settings → Accounts** and make sure a **Personal Team** appears.
+3. Connect the iPhone by USB (or a previously paired developer connection), trust the Mac, and enable **Developer Mode** on the iPhone if iOS requests it.
+4. Obtain the Personal Team ID and the iPhone UDID.
+
+### Build, package and install
+
+From the repository root run:
+
+```bash
+TEAM_ID=YOUR_TEAM_ID \
+DEVICE_UDID=YOUR_IPHONE_UDID \
+bash scripts/install-personal-team.sh
+```
+
+The script performs the full local flow:
+
+- creates/restores `Configs/Local.xcconfig` without committing personal signing data;
+- gives the Personal Team build a unique bundle ID derived from the Team ID;
+- builds the physical-device Debug app using automatic Apple Development provisioning;
+- replaces the normal App Group entitlements with `Configs/PersonalTeam.entitlements`;
+- verifies the app bundle ID, Share Extension bundle ID and code signature;
+- fails if an App Group entitlement unexpectedly remains;
+- packages a local `build/PersonalTeamExport/Bitchat-IVS-Personal.ipa` copy;
+- installs the signed `.app` directly to the selected iPhone using `xcrun devicectl`.
+
+You can override the default Personal Team bundle identifier when necessary:
+
+```bash
+PERSONAL_BUNDLE_ID=com.example.bitchat.personal \
+TEAM_ID=YOUR_TEAM_ID \
+DEVICE_UDID=YOUR_IPHONE_UDID \
+bash scripts/install-personal-team.sh
+```
+
+Personal Team provisioning is temporary and must be re-signed/reinstalled when the free provisioning expires. This route is for development/testing, not TestFlight/App Store distribution.
+
 ## Apple signing policy
 
 No Apple Team ID, private key, certificate, provisioning profile, or App Store Connect credential is committed to the repository.
 
-For local development, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your Apple Developer Team ID. The local file is ignored by git.
+For local paid-team development, copy `Configs/Local.xcconfig.example` to `Configs/Local.xcconfig` and set your Apple Developer Team ID. The local file is ignored by git.
 
 For GitHub Actions signed builds, configure these repository secrets:
 
@@ -56,7 +107,7 @@ Before signed workflows can succeed, the Apple Developer account must own/config
 
 `.github/workflows/ivs-ios-release.yml` is manual-only. It installs the Apple Distribution signing identity in an ephemeral keychain, authenticates with the App Store Connect API key, archives a signed device build, verifies the main app and Share Extension identifiers, code signatures and App Group entitlements, exports a signed App Store Connect IPA, and can optionally upload the archive to TestFlight.
 
-### Direct-install iPhone IPA
+### Direct-install iPhone IPA (paid Ad Hoc)
 
 `.github/workflows/ivs-ios-device-ipa.yml` is a separate manual Ad Hoc release path for installing Bitchat IVS directly on registered iPhones.
 
