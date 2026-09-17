@@ -1,0 +1,264 @@
+name: IVS iOS Signed Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_testflight:
+        description: Upload the validated archive to App Store Connect / TestFlight
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ivs-ios-signed-release
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Archive Bitchat IVS for iOS
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+      APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+      EXPECTED_BUNDLE_ID: com.ivsjsc.bitchat
+      EXPECTED_EXTENSION_BUNDLE_ID: com.ivsjsc.bitchat.ShareExtension
+      EXPECTED_APP_GROUP: group.com.ivsjsc.bitchat
+      EXPECTED_DISPLAY_NAME: Bitchat IVS
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate signing configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            APPLE_TEAM_ID \
+            APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
+            APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD \
+            ASC_KEY_ID \
+            ASC_ISSUER_ID \
+            ASC_PRIVATE_KEY_BASE64; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::Missing required GitHub Actions secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Install Apple distribution certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple-distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ivs-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+
+          printf '%s' "$APPLE_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          test -s "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          IDENTITY_COUNT=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c 'Apple Distribution' || true)
+          if [ "$IDENTITY_COUNT" -lt 1 ]; then
+            echo "::error::No Apple Distribution signing identity found in imported certificate."
+            exit 1
+          fi
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+      - name: Install App Store Connect API key
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_DIR="$RUNNER_TEMP/appstoreconnect/private_keys"
+          mkdir -p "$KEY_DIR"
+          KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
+          printf '%s' "$ASC_PRIVATE_KEY_BASE64" | base64 -D > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          test -s "$KEY_PATH"
+          echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: Show toolchain and IVS release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          grep -E '^(PRODUCT_BUNDLE_IDENTIFIER|APP_GROUP_ID|APP_DISPLAY_NAME)[[:space:]]*=' Configs/Release.xcconfig
+
+      - name: Archive signed iOS app
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf build/BitchatIVS.xcarchive build/export build/testflight-upload
+          xcodebuild \
+            -project bitchat.xcodeproj \
+            -scheme "bitchat (iOS)" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/BitchatIVS.xcarchive \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            clean archive
+
+      - name: Verify signed archive identity and entitlements
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find build/BitchatIVS.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' | head -1)
+          test -n "$APP_PATH"
+
+          APP_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")
+          APP_DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist")
+          echo "App: $APP_PATH"
+          echo "Bundle: $APP_BUNDLE_ID"
+          echo "Display name: $APP_DISPLAY_NAME"
+          test "$APP_BUNDLE_ID" = "$EXPECTED_BUNDLE_ID"
+          test "$APP_DISPLAY_NAME" = "$EXPECTED_DISPLAY_NAME"
+
+          EXT_PATH=$(find "$APP_PATH/PlugIns" -maxdepth 1 -type d -name '*.appex' | head -1)
+          test -n "$EXT_PATH"
+          EXT_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXT_PATH/Info.plist")
+          echo "Share extension bundle: $EXT_BUNDLE_ID"
+          test "$EXT_BUNDLE_ID" = "$EXPECTED_EXTENSION_BUNDLE_ID"
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign -d --entitlements :- "$APP_PATH" 2>/dev/null > "$RUNNER_TEMP/app-entitlements.plist"
+          codesign -d --entitlements :- "$EXT_PATH" 2>/dev/null > "$RUNNER_TEMP/extension-entitlements.plist"
+          plutil -p "$RUNNER_TEMP/app-entitlements.plist"
+          plutil -p "$RUNNER_TEMP/extension-entitlements.plist"
+          grep -F "$EXPECTED_APP_GROUP" "$RUNNER_TEMP/app-entitlements.plist"
+          grep -F "$EXPECTED_APP_GROUP" "$RUNNER_TEMP/extension-entitlements.plist"
+
+      - name: Create App Store Connect export options
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
+
+      - name: Export IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/BitchatIVS.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          IPA=$(find build/export -maxdepth 1 -type f -name '*.ipa' | head -1)
+          test -n "$IPA"
+          echo "IPA_PATH=$IPA" >> "$GITHUB_ENV"
+          shasum -a 256 "$IPA"
+
+      - name: Upload signed IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bitchat-IVS-iOS-Signed-IPA
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload archive diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: Bitchat-IVS-iOS-xcarchive
+          path: build/BitchatIVS.xcarchive
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload to TestFlight
+        if: ${{ inputs.upload_to_testflight }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/UploadOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>destination</key>
+            <string>upload</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>manageAppVersionAndBuildNumber</key>
+            <false/>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$RUNNER_TEMP/UploadOptions.plist"
+          xcodebuild \
+            -exportArchive \
+            -archivePath build/BitchatIVS.xcarchive \
+            -exportPath build/testflight-upload \
+            -exportOptionsPlist "$RUNNER_TEMP/UploadOptions.plist" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Clean signing material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${SIGNING_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN_PATH"
+          fi
+          rm -f "$RUNNER_TEMP/apple-distribution.p12"
+          rm -rf "$RUNNER_TEMP/appstoreconnect"
