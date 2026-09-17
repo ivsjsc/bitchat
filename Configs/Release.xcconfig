@@ -6,9 +6,10 @@ MACOSX_DEPLOYMENT_TARGET = 13.0
 SWIFT_VERSION = 5.0
 
 // IVS fork identity. Apple Team ID is intentionally not committed.
-// For local device builds, override DEVELOPMENT_TEAM in Configs/Local.xcconfig.
 CODE_SIGN_STYLE = Automatic
-
 PRODUCT_BUNDLE_IDENTIFIER = com.ivsjsc.bitchat
 APP_GROUP_ID = group.com.ivsjsc.bitchat
 APP_DISPLAY_NAME = Bitchat IVS
+
+// Optional developer-specific signing/identifier overrides. Local.xcconfig is gitignored.
+#include? "Local.xcconfig"
