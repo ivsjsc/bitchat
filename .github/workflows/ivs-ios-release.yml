@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 45
     env:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_BASE64 }}
+      APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       ASC_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
@@ -40,7 +42,13 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for name in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY_BASE64; do
+          for name in \
+            APPLE_TEAM_ID \
+            APPLE_DISTRIBUTION_CERTIFICATE_BASE64 \
+            APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD \
+            ASC_KEY_ID \
+            ASC_ISSUER_ID \
+            ASC_PRIVATE_KEY_BASE64; do
             if [ -z "${!name:-}" ]; then
               echo "::error::Missing required GitHub Actions secret: $name"
               missing=1
@@ -49,6 +57,41 @@ jobs:
           if [ "$missing" -ne 0 ]; then
             exit 1
           fi
+
+      - name: Install Apple distribution certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CERTIFICATE_PATH="$RUNNER_TEMP/apple-distribution.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/ivs-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 24)"
+
+          printf '%s' "$APPLE_DISTRIBUTION_CERTIFICATE_BASE64" | base64 -D > "$CERTIFICATE_PATH"
+          test -s "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" \
+            -P "$APPLE_DISTRIBUTION_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+
+          IDENTITY_COUNT=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -c 'Apple Distribution' || true)
+          if [ "$IDENTITY_COUNT" -lt 1 ]; then
+            echo "::error::No Apple Distribution signing identity found in imported certificate."
+            exit 1
+          fi
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
       - name: Install App Store Connect API key
         shell: bash
@@ -81,6 +124,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/BitchatIVS.xcarchive \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_STYLE=Automatic \
             -allowProvisioningUpdates \
             -authenticationKeyPath "$ASC_KEY_PATH" \
             -authenticationKeyID "$ASC_KEY_ID" \
@@ -207,3 +251,14 @@ jobs:
             -authenticationKeyPath "$ASC_KEY_PATH" \
             -authenticationKeyID "$ASC_KEY_ID" \
             -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Clean signing material
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${SIGNING_KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$SIGNING_KEYCHAIN_PATH"
+          fi
+          rm -f "$RUNNER_TEMP/apple-distribution.p12"
+          rm -rf "$RUNNER_TEMP/appstoreconnect"
