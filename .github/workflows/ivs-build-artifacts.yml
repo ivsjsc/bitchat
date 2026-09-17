@@ -10,6 +10,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ivs-build-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  EXPECTED_BUNDLE_ID: com.ivsjsc.bitchat
+  EXPECTED_DISPLAY_NAME: Bitchat IVS
+
 jobs:
   build-artifacts:
     name: Build unsigned IVS release artifacts
@@ -42,8 +50,12 @@ jobs:
 
           IOS_APP=$(find .DerivedData/ios/Build/Products -type d -name '*.app' | head -1)
           test -n "$IOS_APP"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$IOS_APP/Info.plist"
+          IOS_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist")
+          IOS_DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$IOS_APP/Info.plist")
+          echo "iOS bundle: $IOS_BUNDLE_ID"
+          echo "iOS display name: $IOS_DISPLAY_NAME"
+          test "$IOS_BUNDLE_ID" = "$EXPECTED_BUNDLE_ID"
+          test "$IOS_DISPLAY_NAME" = "$EXPECTED_DISPLAY_NAME"
           ditto -c -k --sequesterRsrc --keepParent "$IOS_APP" Bitchat-IVS-iOS-Simulator-Release.zip
 
       - name: Build macOS universal release
@@ -62,8 +74,12 @@ jobs:
 
           MAC_APP=$(find .DerivedData/macos/Build/Products -type d -name '*.app' | head -1)
           test -n "$MAC_APP"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$MAC_APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$MAC_APP/Contents/Info.plist"
+          MAC_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$MAC_APP/Contents/Info.plist")
+          MAC_DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$MAC_APP/Contents/Info.plist")
+          echo "macOS bundle: $MAC_BUNDLE_ID"
+          echo "macOS display name: $MAC_DISPLAY_NAME"
+          test "$MAC_BUNDLE_ID" = "$EXPECTED_BUNDLE_ID"
+          test "$MAC_DISPLAY_NAME" = "$EXPECTED_DISPLAY_NAME"
           ditto -c -k --sequesterRsrc --keepParent "$MAC_APP" Bitchat-IVS-macOS-Universal-Release.zip
 
       - name: Upload iOS Simulator artifact
