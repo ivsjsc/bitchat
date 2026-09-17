@@ -26,6 +26,10 @@ jobs:
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
       ASC_PRIVATE_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_PRIVATE_KEY_BASE64 }}
+      EXPECTED_BUNDLE_ID: com.ivsjsc.bitchat
+      EXPECTED_EXTENSION_BUNDLE_ID: com.ivsjsc.bitchat.ShareExtension
+      EXPECTED_APP_GROUP: group.com.ivsjsc.bitchat
+      EXPECTED_DISPLAY_NAME: Bitchat IVS
 
     steps:
       - name: Checkout
@@ -53,8 +57,9 @@ jobs:
           KEY_DIR="$RUNNER_TEMP/appstoreconnect/private_keys"
           mkdir -p "$KEY_DIR"
           KEY_PATH="$KEY_DIR/AuthKey_${ASC_KEY_ID}.p8"
-          printf '%s' "$ASC_PRIVATE_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+          printf '%s' "$ASC_PRIVATE_KEY_BASE64" | base64 -D > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
+          test -s "$KEY_PATH"
           echo "ASC_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Show toolchain and IVS release identity
@@ -68,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf build/BitchatIVS.xcarchive build/export
+          rm -rf build/BitchatIVS.xcarchive build/export build/testflight-upload
           xcodebuild \
             -project bitchat.xcodeproj \
             -scheme "bitchat (iOS)" \
@@ -88,11 +93,28 @@ jobs:
           set -euo pipefail
           APP_PATH=$(find build/BitchatIVS.xcarchive/Products/Applications -maxdepth 1 -type d -name '*.app' | head -1)
           test -n "$APP_PATH"
+
+          APP_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")
+          APP_DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist")
           echo "App: $APP_PATH"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist"
-          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$APP_PATH/Info.plist"
+          echo "Bundle: $APP_BUNDLE_ID"
+          echo "Display name: $APP_DISPLAY_NAME"
+          test "$APP_BUNDLE_ID" = "$EXPECTED_BUNDLE_ID"
+          test "$APP_DISPLAY_NAME" = "$EXPECTED_DISPLAY_NAME"
+
+          EXT_PATH=$(find "$APP_PATH/PlugIns" -maxdepth 1 -type d -name '*.appex' | head -1)
+          test -n "$EXT_PATH"
+          EXT_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$EXT_PATH/Info.plist")
+          echo "Share extension bundle: $EXT_BUNDLE_ID"
+          test "$EXT_BUNDLE_ID" = "$EXPECTED_EXTENSION_BUNDLE_ID"
+
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
-          codesign -d --entitlements :- "$APP_PATH" 2>/dev/null | plutil -p -
+          codesign -d --entitlements :- "$APP_PATH" 2>/dev/null > "$RUNNER_TEMP/app-entitlements.plist"
+          codesign -d --entitlements :- "$EXT_PATH" 2>/dev/null > "$RUNNER_TEMP/extension-entitlements.plist"
+          plutil -p "$RUNNER_TEMP/app-entitlements.plist"
+          plutil -p "$RUNNER_TEMP/extension-entitlements.plist"
+          grep -F "$EXPECTED_APP_GROUP" "$RUNNER_TEMP/app-entitlements.plist"
+          grep -F "$EXPECTED_APP_GROUP" "$RUNNER_TEMP/extension-entitlements.plist"
 
       - name: Create App Store Connect export options
         shell: bash
