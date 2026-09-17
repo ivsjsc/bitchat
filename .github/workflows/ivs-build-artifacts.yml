@@ -5,13 +5,14 @@ on:
   push:
     branches:
       - develop
+      - ivs/branding-signing
 
 permissions:
   contents: read
 
 jobs:
   build-artifacts:
-    name: Build unsigned release artifacts
+    name: Build unsigned IVS release artifacts
     runs-on: macos-latest
     timeout-minutes: 30
 
@@ -41,7 +42,9 @@ jobs:
 
           IOS_APP=$(find .DerivedData/ios/Build/Products -type d -name '*.app' | head -1)
           test -n "$IOS_APP"
-          ditto -c -k --sequesterRsrc --keepParent "$IOS_APP" bitchat-iOS-Simulator-Release.zip
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$IOS_APP/Info.plist"
+          ditto -c -k --sequesterRsrc --keepParent "$IOS_APP" Bitchat-IVS-iOS-Simulator-Release.zip
 
       - name: Build macOS universal release
         run: |
@@ -59,18 +62,20 @@ jobs:
 
           MAC_APP=$(find .DerivedData/macos/Build/Products -type d -name '*.app' | head -1)
           test -n "$MAC_APP"
-          ditto -c -k --sequesterRsrc --keepParent "$MAC_APP" bitchat-macOS-Universal-Release.zip
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$MAC_APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$MAC_APP/Contents/Info.plist"
+          ditto -c -k --sequesterRsrc --keepParent "$MAC_APP" Bitchat-IVS-macOS-Universal-Release.zip
 
       - name: Upload iOS Simulator artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bitchat-iOS-Simulator-Release
-          path: bitchat-iOS-Simulator-Release.zip
+          name: Bitchat-IVS-iOS-Simulator-Release
+          path: Bitchat-IVS-iOS-Simulator-Release.zip
           if-no-files-found: error
 
       - name: Upload macOS universal artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bitchat-macOS-Universal-Release
-          path: bitchat-macOS-Universal-Release.zip
+          name: Bitchat-IVS-macOS-Universal-Release
+          path: Bitchat-IVS-macOS-Universal-Release.zip
           if-no-files-found: error
